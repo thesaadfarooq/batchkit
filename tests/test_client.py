@@ -179,6 +179,20 @@ def test_map_rejects_duplicate_custom_ids(tmp_path: Path) -> None:
         )
 
 
+def test_map_rejects_empty_items(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    client = BatchClient(sdk)
+
+    with pytest.raises(ValueError, match="items must not be empty"):
+        client.map(
+            name="movies",
+            items=[],
+            model="gpt-4.1-mini",
+            build_request=lambda item: {"input": item["prompt"]},
+            storage_dir=tmp_path / "job",
+        )
+
+
 def test_wait_returns_results_and_retry_job(tmp_path: Path) -> None:
     sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
     client = BatchClient(sdk)
@@ -259,3 +273,18 @@ async def test_async_map_and_wait(tmp_path: Path) -> None:
 
     assert results.counts.total == 2
     assert results.successful()[0].custom_id == "movies-0"
+
+
+@pytest.mark.asyncio
+async def test_async_map_rejects_empty_items(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK()
+    client = AsyncBatchClient(sdk)
+
+    with pytest.raises(ValueError, match="items must not be empty"):
+        await client.map(
+            name="movies",
+            items=[],
+            model="gpt-4.1-mini",
+            build_request=lambda item: {"input": item["prompt"]},
+            storage_dir=tmp_path / "job",
+        )

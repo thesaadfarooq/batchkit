@@ -21,10 +21,6 @@ def default_jobs_root() -> Path:
     return Path(".batchkit") / "jobs"
 
 
-def create_job_dir(name: str, storage_dir: str | Path | None = None) -> Path:
-    return create_job_dir_in_root(name=name, storage_dir=storage_dir)
-
-
 def create_job_dir_in_root(
     *,
     name: str,

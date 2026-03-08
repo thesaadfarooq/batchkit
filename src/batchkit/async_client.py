@@ -65,6 +65,9 @@ class AsyncBatchClient:
                 }
             )
 
+        if not request_rows:
+            raise ValueError("items must not be empty")
+
         return await self._submit_request_rows(
             name=name,
             request_rows=request_rows,
