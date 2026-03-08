@@ -77,4 +77,4 @@ Current scope:
 - `responses` endpoint first
 - sync and async clients
 
-Contributor setup and release workflow live in [CONTRIBUTING.md](/Users/saadfarooq/Documents/batchkit/batchkit/CONTRIBUTING.md).
+Contributor setup and release workflow live in [CONTRIBUTING.md](CONTRIBUTING.md).
