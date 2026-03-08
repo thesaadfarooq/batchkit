@@ -98,7 +98,7 @@ ipython_config.py
 #   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
-#uv.lock
+uv.lock
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
@@ -193,6 +193,16 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Local batchkit artifacts
+.batchkit/
+
+# Internal local planning notes
+docs/BATCH_PYTHON_ABSTRACTIONS_ANALYSIS.md
+docs/openai-batch-abstractions-analysis.md
+
+# macOS
+.DS_Store
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to

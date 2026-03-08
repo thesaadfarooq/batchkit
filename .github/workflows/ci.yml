@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Create virtualenv
+        run: uv venv --python ${{ matrix.python-version }} .venv
+      - name: Install dependencies
+        run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Lint
+        run: .venv/bin/python -m ruff check .
+      - name: Type check
+        run: .venv/bin/python -m mypy src
+      - name: Tests
+        run: .venv/bin/python -m pytest
+      - name: Build
+        run: uv build

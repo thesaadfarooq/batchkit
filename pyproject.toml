@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "batchkit-ai"
+version = "0.1.0"
+description = "A simple Python wrapper for OpenAI Batch workflows."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [
+  { name = "batchkit contributors" },
+]
+dependencies = [
+  "openai>=1.0.0",
+]
+keywords = ["openai", "batch", "sdk", "python", "async"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+pydantic = [
+  "pydantic>=2.0.0",
+]
+dev = [
+  "mypy>=1.17.0",
+  "pytest>=8.4.0",
+  "pytest-asyncio>=1.1.0",
+  "ruff>=0.12.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/thesaadfarooq/batchkit"
+Issues = "https://github.com/thesaadfarooq/batchkit/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/batchkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "strict"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
