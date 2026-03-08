@@ -4,7 +4,17 @@ import argparse
 import re
 from pathlib import Path
 
-VERSION_PATTERN = re.compile(r'^(version\s*=\s*")(\d+)\.(\d+)\.(\d+)(")\s*$')
+PROJECT_SECTION_PATTERN = re.compile(
+    r"(?ms)^\[project\]\s*(?:\r?\n)(?P<body>.*?)(?=^\[|\Z)"
+)
+VERSION_PATTERN = re.compile(
+    r'^(?P<prefix>\s*version\s*=\s*")'
+    r'(?P<version>\d+\.\d+\.\d+)'
+    r'(?P<suffix>")'
+    r'(?P<trailing>[ \t]*)'
+    r'(?P<line_ending>\r?\n|$)',
+    re.MULTILINE,
+)
 
 
 def bump_version(version: str, release_type: str) -> str:
@@ -24,25 +34,28 @@ def bump_version(version: str, release_type: str) -> str:
 
 
 def update_project_version(text: str, release_type: str) -> tuple[str, str]:
-    in_project = False
-    lines = text.splitlines()
+    project_match = PROJECT_SECTION_PATTERN.search(text)
+    if project_match is None:
+        raise ValueError("Could not find [project] in pyproject.toml")
 
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == "[project]":
-            in_project = True
-            continue
-        if in_project and stripped.startswith("[") and stripped.endswith("]"):
-            break
-        if in_project:
-            match = VERSION_PATTERN.match(line)
-            if match is not None:
-                current_version = ".".join(match.groups()[1:4])
-                new_version = bump_version(current_version, release_type)
-                lines[index] = f'{match.group(1)}{new_version}{match.group(5)}'
-                return "\n".join(lines) + "\n", new_version
+    body = project_match.group("body")
+    version_match = VERSION_PATTERN.search(body)
+    if version_match is None:
+        raise ValueError("Could not find [project].version in pyproject.toml")
 
-    raise ValueError("Could not find [project].version in pyproject.toml")
+    current_version = version_match.group("version")
+    new_version = bump_version(current_version, release_type)
+    updated_body = VERSION_PATTERN.sub(
+        rf"\g<prefix>{new_version}\g<suffix>\g<trailing>\g<line_ending>",
+        body,
+        count=1,
+    )
+    updated_text = (
+        text[: project_match.start("body")]
+        + updated_body
+        + text[project_match.end("body") :]
+    )
+    return updated_text, new_version
 
 
 def main() -> int:
@@ -55,9 +68,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    original = args.path.read_text(encoding="utf-8")
+    with args.path.open("r", encoding="utf-8", newline="") as file:
+        original = file.read()
     updated, version = update_project_version(original, args.release_type)
-    args.path.write_text(updated, encoding="utf-8")
+    with args.path.open("w", encoding="utf-8", newline="") as file:
+        file.write(updated)
     print(version)
     return 0
 
