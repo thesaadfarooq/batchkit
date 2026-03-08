@@ -29,4 +29,4 @@ uv pip install -e ".[dev]"
 - import package: `batchkit`
 - publishing runs through the `Release` and `Publish` workflows
 - GitHub Actions publishes through the `pypi` environment
-- maintainer release steps are documented in [RELEASING.md](/Users/saadfarooq/Documents/batchkit/batchkit/RELEASING.md)
+- maintainer release steps are documented in [RELEASING.md](RELEASING.md)
