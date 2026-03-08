@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "bump_version.py"
+SPEC = importlib.util.spec_from_file_location("batchkit_bump_version", SCRIPT_PATH)
+assert SPEC is not None
+assert SPEC.loader is not None
+BUMP_VERSION_MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BUMP_VERSION_MODULE)
+update_project_version = BUMP_VERSION_MODULE.update_project_version
 
 
 def _run_bump(tmp_path: Path, release_type: str) -> tuple[str, str]:
@@ -57,3 +66,13 @@ def test_preserves_crlf_line_endings(tmp_path: Path) -> None:
 
     contents = pyproject.read_bytes()
     assert b'\r\nversion = "0.1.1"\r\n' in contents
+
+
+def test_raises_when_project_section_is_missing() -> None:
+    with pytest.raises(ValueError, match=r"Could not find \[project\] in pyproject.toml"):
+        update_project_version('version = "0.1.0"\n', "patch")
+
+
+def test_raises_when_project_version_is_missing() -> None:
+    with pytest.raises(ValueError, match=r"Could not find \[project\]\.version in pyproject.toml"):
+        update_project_version('[project]\nname = "batchkit-ai"\n', "patch")

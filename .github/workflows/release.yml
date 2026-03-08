@@ -23,14 +23,24 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.11"
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+      - name: Install dependencies
+        run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Run quality checks
+        run: |
+          .venv/bin/python -m ruff check .
+          .venv/bin/python -m mypy src
+          .venv/bin/python -m pytest
       - name: Bump version
         id: bump
         run: |
-          version=$(python scripts/bump_version.py pyproject.toml "${{ inputs.release_type }}")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          python_bin=.venv/bin/python
+          bumped_version=$($python_bin scripts/bump_version.py pyproject.toml "${{ inputs.release_type }}")
+          echo "version=$bumped_version" >> "$GITHUB_OUTPUT"
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"

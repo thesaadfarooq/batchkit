@@ -2,7 +2,7 @@
 
 `batchkit-ai` uses a two-workflow release flow:
 
-1. `Release` bumps the version in `pyproject.toml`, commits it to `main`, and creates a version tag.
+1. `Release` runs quality checks on `main`, then bumps the version in `pyproject.toml`, commits it to `main`, and creates a version tag.
 2. `Publish` runs from that tag, publishes to PyPI, and creates the GitHub Release with generated notes.
 
 ## Maintainer flow
