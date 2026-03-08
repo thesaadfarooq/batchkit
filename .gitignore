@@ -197,6 +197,10 @@ cython_debug/
 # Local batchkit artifacts
 .batchkit/
 
+# Internal local planning notes
+docs/BATCH_PYTHON_ABSTRACTIONS_ANALYSIS.md
+docs/openai-batch-abstractions-analysis.md
+
 # macOS
 .DS_Store
 
