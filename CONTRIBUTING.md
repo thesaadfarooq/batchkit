@@ -27,5 +27,6 @@ uv pip install -e ".[dev]"
 
 - PyPI distribution name: `batchkit-ai`
 - import package: `batchkit`
-- publishing runs from Git tags like `v0.1.0`
+- publishing runs through the `Release` and `Publish` workflows
 - GitHub Actions publishes through the `pypi` environment
+- maintainer release steps are documented in [RELEASING.md](/Users/saadfarooq/Documents/batchkit/batchkit/RELEASING.md)
