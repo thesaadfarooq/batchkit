@@ -2,6 +2,14 @@
 
 `batchkit` is a thin Python wrapper around the OpenAI Batch API.
 
+It turns the low-level Batch workflow into a simpler Python flow:
+
+- map source items into batch requests
+- submit through the official `openai` SDK
+- wait for completion with status updates
+- fetch parsed results
+- retry failed rows without rebuilding the whole job by hand
+
 Install from PyPI:
 
 ```bash
@@ -22,13 +30,6 @@ It is designed to remove the repetitive parts of batch usage:
 - downloading output and error artifacts
 - reconciling results back to the original inputs
 - retrying failed rows
-
-## Goals
-
-- keep the official `openai` SDK under the hood
-- make the happy path one normal Python flow
-- persist inspectable local manifests under `.batchkit/`
-- support both sync and async usage
 
 ## Example
 
@@ -58,21 +59,22 @@ for row in results.rows:
         print(row.custom_id, row.error)
 ```
 
-## Development
+## What It Handles
 
-This project is built test-first.
+- request JSONL generation
+- batch file upload and creation
+- polling and terminal-state handling
+- local manifests under `.batchkit/`
+- output and error artifact download
+- result reconciliation by `custom_id`
+- retry job creation for retryable rows
 
-```bash
-uv venv --python 3.11
-uv pip install -e ".[dev]"
-.venv/bin/python -m pytest
-```
+## Scope
 
-## Release
+Current scope:
 
-Publishing is handled by GitHub Actions.
+- OpenAI only
+- `responses` endpoint first
+- sync and async clients
 
-- create a version tag like `v0.1.0`
-- push the tag
-- approve the `pypi` environment job
-- the `Publish` workflow uploads `batchkit-ai` to PyPI
+Contributor setup and release workflow live in [CONTRIBUTING.md](/Users/saadfarooq/Documents/batchkit/batchkit/CONTRIBUTING.md).
