@@ -42,12 +42,16 @@ jobs:
           bumped_version=$($python_bin scripts/bump_version.py pyproject.toml "${{ inputs.release_type }}")
           echo "version=$bumped_version" >> "$GITHUB_OUTPUT"
       - name: Commit version bump
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pyproject.toml
-          git commit -m "Release v${{ steps.bump.outputs.version }}"
+          git commit -m "Release v$VERSION"
       - name: Create tag
-        run: git tag -a "v${{ steps.bump.outputs.version }}" -m "Release v${{ steps.bump.outputs.version }}"
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: git tag -a "v$VERSION" -m "Release v$VERSION"
       - name: Push release commit and tag
         run: git push origin main --follow-tags
