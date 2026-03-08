@@ -78,6 +78,7 @@ class BatchResults:
         return self.retryable()
 
     def incomplete(self) -> list[BatchRow]:
+        """Return rows that did not finish cleanly, including expired or cancelled requests."""
         return [row for row in self.rows if row.status in {"incomplete", "expired", "cancelled"}]
 
     def errors(self) -> list[BatchError]:
