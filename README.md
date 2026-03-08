@@ -67,3 +67,12 @@ uv venv --python 3.11
 uv pip install -e ".[dev]"
 .venv/bin/python -m pytest
 ```
+
+## Release
+
+Publishing is handled by GitHub Actions.
+
+- create a version tag like `v0.1.0`
+- push the tag
+- approve the `pypi` environment job
+- the `Publish` workflow uploads `batchkit-ai` to PyPI

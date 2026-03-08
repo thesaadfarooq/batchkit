@@ -22,3 +22,10 @@ uv pip install -e ".[dev]"
 - new features should have tests
 - behavior changes should update docs
 - PRs should explain user-visible impact
+
+## Releases
+
+- PyPI distribution name: `batchkit-ai`
+- import package: `batchkit`
+- publishing runs from Git tags like `v0.1.0`
+- GitHub Actions publishes through the `pypi` environment
