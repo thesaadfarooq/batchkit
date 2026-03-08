@@ -16,6 +16,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
 
     steps:
@@ -55,3 +56,8 @@ jobs:
         run: git tag -a "v$VERSION" -m "Release v$VERSION"
       - name: Push release commit and tag
         run: git push origin main --follow-tags
+      - name: Trigger publish workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: gh workflow run publish.yml --ref main -f tag_name="v$VERSION"
