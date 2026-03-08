@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "batchkit"
+name = "batchkit-ai"
 version = "0.1.0"
 description = "A simple Python wrapper for OpenAI Batch workflows."
 readme = "README.md"
@@ -39,8 +39,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/saadfarooq/batchkit"
-Issues = "https://github.com/saadfarooq/batchkit/issues"
+Homepage = "https://github.com/thesaadfarooq/batchkit"
+Issues = "https://github.com/thesaadfarooq/batchkit/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/batchkit"]
@@ -48,6 +48,7 @@ packages = ["src/batchkit"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "strict"
 
 [tool.ruff]
 line-length = 100

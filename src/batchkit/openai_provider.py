@@ -58,6 +58,7 @@ class OpenAIProvider:
             return bytes(response.read())
         raise TypeError("Unsupported file content response from SDK")
 
+
 class AsyncOpenAIProvider:
     endpoint = "/v1/responses"
 
@@ -109,12 +110,25 @@ class AsyncOpenAIProvider:
 
 
 def _coerce_batch(batch: Any) -> RemoteBatch:
+    raw_request_counts = _get_value(batch, "request_counts")
+    if isinstance(raw_request_counts, dict):
+        request_counts = {key: int(value) for key, value in raw_request_counts.items()}
+    elif raw_request_counts is None:
+        request_counts = {}
+    else:
+        request_counts = {}
+        for key in ("total", "completed", "failed"):
+            if hasattr(raw_request_counts, key):
+                value = getattr(raw_request_counts, key)
+                if value is not None:
+                    request_counts[key] = int(value)
+
     return RemoteBatch(
         id=str(_get_value(batch, "id")),
         status=str(_get_value(batch, "status")),
         input_file_id=_get_value(batch, "input_file_id"),
         output_file_id=_get_value(batch, "output_file_id"),
         error_file_id=_get_value(batch, "error_file_id"),
-        request_counts=_get_value(batch, "request_counts") or {},
+        request_counts=request_counts,
         raw=batch if isinstance(batch, dict) else None,
     )

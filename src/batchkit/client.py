@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 from .errors import DuplicateCustomIDError
 from .jobs import BatchJob
 from .manifests import (
-    create_job_dir,
+    create_job_dir_in_root,
     generate_local_job_id,
     manifest_path,
     serialize_source_item,
@@ -94,10 +94,12 @@ class BatchClient:
         metadata: dict[str, str] | None = None,
         storage_dir: str | Path | None = None,
         parent_job_id: str | None = None,
+        storage_root: str | Path | None = None,
     ) -> BatchJob:
-        job_dir = create_job_dir(
-            name,
-            storage_dir=storage_dir or (self.storage_root / name if self.storage_root else None),
+        job_dir = create_job_dir_in_root(
+            name=name,
+            storage_dir=storage_dir,
+            storage_root=storage_root or self.storage_root,
         )
         requests_file = job_dir / "requests.jsonl"
         write_jsonl(requests_file, request_rows)

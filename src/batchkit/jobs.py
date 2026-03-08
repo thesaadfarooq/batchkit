@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-from .errors import BatchNotReadyError, RetryUnavailableError
-from .manifests import read_json, read_jsonl, write_json
+from .errors import BatchError, BatchNotReadyError, RetryUnavailableError
+from .manifests import read_json, read_jsonl, utc_now_iso, write_json
 from .results import BatchResults, build_results
 
 TERMINAL_STATUSES = {"completed", "failed", "expired", "cancelled"}
@@ -130,11 +130,12 @@ class BatchJob:
         return cast(
             BatchJob,
             self._client._submit_request_rows(
-            name=retry_name,
-            request_rows=request_rows,
-            request_index=request_index,
-            metadata={"retry_of": self.id},
-            parent_job_id=self.id,
+                name=retry_name,
+                request_rows=request_rows,
+                request_index=request_index,
+                metadata={"retry_of": self.id},
+                parent_job_id=self.id,
+                storage_root=self.storage_dir.parent,
             ),
         )
 
@@ -152,6 +153,7 @@ class BatchJob:
         self._manifest["output_file_id"] = remote.output_file_id
         self._manifest["error_file_id"] = remote.error_file_id
         self._manifest["request_counts"] = remote.request_counts
+        self._manifest["updated_at"] = utc_now_iso()
         write_json(self._manifest_file, self._manifest)
 
     def _load_artifact_rows(self, manifest_key: str, artifact_path: Path) -> list[dict[str, Any]]:
@@ -180,7 +182,11 @@ class BatchJob:
                     row.ok = False
                     row.status = "failed_validation"
                     row.retryable = False
-                    row.error = exc  # type: ignore[assignment]
+                    row.error = BatchError(
+                        "Schema validation failed",
+                        code="schema_validation_error",
+                        payload={"errors": exc.errors()},
+                    )
             rows.append(row)
         return BatchResults(job=results.job, rows=rows)
 
@@ -277,6 +283,7 @@ class AsyncBatchJob(BatchJob):
                 request_index=request_index,
                 metadata={"retry_of": self.id},
                 parent_job_id=self.id,
+                storage_root=self.storage_dir.parent,
             ),
         )
 

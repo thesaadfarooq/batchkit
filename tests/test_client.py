@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from batchkit import AsyncBatchClient, BatchClient, DuplicateCustomIDError
+from batchkit import AsyncBatchClient, BatchClient, DuplicateCustomIDError, RetryUnavailableError
 
 
 @dataclass
@@ -17,6 +17,13 @@ class FakeBatch:
     output_file_id: str | None = None
     error_file_id: str | None = None
     request_counts: dict[str, int] | None = None
+
+
+@dataclass
+class FakeRequestCounts:
+    total: int
+    completed: int
+    failed: int
 
 
 class FakeFilesAPI:
@@ -189,7 +196,7 @@ def test_wait_returns_results_and_retry_job(tmp_path: Path) -> None:
     assert results.counts.succeeded == 1
     assert results.counts.retryable == 1
 
-    retry_job = job.retry_failed(name="movies-retry")
+    retry_job = job.retry_failed()
     retry_requests = (
         (retry_job.storage_dir / "requests.jsonl")
         .read_text(encoding="utf-8")
@@ -199,6 +206,41 @@ def test_wait_returns_results_and_retry_job(tmp_path: Path) -> None:
 
     assert len(retry_requests) == 1
     assert json.loads(retry_requests[0])["custom_id"] == "movies-1"
+    assert retry_job.storage_dir.parent == tmp_path
+
+
+def test_refresh_serializes_request_counts_objects(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    sdk.batches.current.request_counts = FakeRequestCounts(total=2, completed=0, failed=0)  # type: ignore[assignment]
+    client = BatchClient(sdk)
+
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job.refresh()
+
+    manifest = json.loads((tmp_path / "job" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["request_counts"] == {"total": 2, "completed": 1, "failed": 1}
+    assert manifest["updated_at"] != manifest["created_at"]
+
+
+def test_retry_failed_raises_public_retry_error(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(RetryUnavailableError):
+        job.retry_failed()
 
 
 @pytest.mark.asyncio

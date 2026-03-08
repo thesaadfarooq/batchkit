@@ -2,6 +2,18 @@
 
 `batchkit` is a thin Python wrapper around the OpenAI Batch API.
 
+Install from PyPI:
+
+```bash
+pip install batchkit-ai
+```
+
+Import as:
+
+```python
+import batchkit
+```
+
 It is designed to remove the repetitive parts of batch usage:
 
 - building JSONL request files

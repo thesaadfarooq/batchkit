@@ -9,7 +9,7 @@ from uuid import uuid4
 
 
 def utc_now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def slugify(value: str) -> str:
@@ -22,12 +22,22 @@ def default_jobs_root() -> Path:
 
 
 def create_job_dir(name: str, storage_dir: str | Path | None = None) -> Path:
+    return create_job_dir_in_root(name=name, storage_dir=storage_dir)
+
+
+def create_job_dir_in_root(
+    *,
+    name: str,
+    storage_dir: str | Path | None = None,
+    storage_root: str | Path | None = None,
+) -> Path:
     if storage_dir is not None:
         job_dir = Path(storage_dir)
     else:
         slug = slugify(name)
         suffix = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        job_dir = default_jobs_root() / f"{slug}-{suffix}"
+        root = Path(storage_root) if storage_root is not None else default_jobs_root()
+        job_dir = root / f"{slug}-{suffix}"
     job_dir.mkdir(parents=True, exist_ok=True)
     return job_dir
 
