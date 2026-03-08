@@ -68,4 +68,5 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release create "$TAG_NAME" --verify-tag --generate-notes
