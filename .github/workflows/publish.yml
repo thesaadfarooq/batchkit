@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag to publish, for example v0.1.1"
+        required: true
+        type: string
+
+env:
+  TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
 
 jobs:
   build:
@@ -11,6 +20,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.11"
@@ -57,5 +68,4 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
         run: gh release create "$TAG_NAME" --verify-tag --generate-notes
