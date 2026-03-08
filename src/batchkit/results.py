@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 
 NON_RETRYABLE_ERROR_CODES = {"invalid_request_error", "validation_error"}
+PARTIAL_RESULT_ERROR_CODE = "missing_result_row"
 
 
 @dataclass(slots=True)
@@ -25,6 +26,19 @@ class BatchRow:
     error: BatchError | None
     source_item: Any | None
     order: int
+
+    @property
+    def failed(self) -> bool:
+        return not self.ok
+
+    @property
+    def response_body(self) -> dict[str, Any] | None:
+        if self.response is None:
+            return None
+        body = self.response.get("body")
+        if isinstance(body, dict):
+            return body
+        return self.response
 
 
 @dataclass(slots=True)
@@ -47,14 +61,32 @@ class BatchResults:
     def successful(self) -> list[BatchRow]:
         return [row for row in self.rows if row.ok]
 
+    def successes(self) -> list[BatchRow]:
+        return self.successful()
+
     def failed(self) -> list[BatchRow]:
         return [row for row in self.rows if not row.ok]
+
+    def failures(self) -> list[BatchRow]:
+        return self.failed()
 
     def retryable(self) -> list[BatchRow]:
         return [row for row in self.rows if row.retryable]
 
+    def retryables(self) -> list[BatchRow]:
+        return self.retryable()
+
+    def incomplete(self) -> list[BatchRow]:
+        return [row for row in self.rows if row.status in {"incomplete", "expired", "cancelled"}]
+
+    def errors(self) -> list[BatchError]:
+        return [row.error for row in self.rows if row.error is not None]
+
     def by_custom_id(self) -> dict[str, BatchRow]:
         return {row.custom_id: row for row in self.rows}
+
+    def get(self, custom_id: str) -> BatchRow | None:
+        return self.by_custom_id().get(custom_id)
 
     def ordered(self) -> BatchResults:
         return BatchResults(job=self.job, rows=sorted(self.rows, key=lambda row: row.order))
@@ -110,9 +142,8 @@ def _build_row(
 
     if error_row is not None:
         payload = error_row.get("error") or {}
-        message = payload.get("message", "Batch request failed")
-        code = payload.get("code") or payload.get("type")
-        retryable = code not in NON_RETRYABLE_ERROR_CODES
+        error = BatchError.from_payload(payload, default_message="Batch request failed")
+        retryable = error.code not in NON_RETRYABLE_ERROR_CODES
         status = "failed_validation" if not retryable else "failed_execution"
         return BatchRow(
             custom_id=record["custom_id"],
@@ -122,7 +153,7 @@ def _build_row(
             request=record["request"],
             request_line=record["request_line"],
             response=None,
-            error=BatchError(message, code=code, payload=payload),
+            error=error,
             source_item=record.get("source_item"),
             order=record["index"],
         )
@@ -130,12 +161,40 @@ def _build_row(
     if batch_status == "expired":
         status = "expired"
         retryable = True
+        error = BatchError.from_payload(
+            {
+                "message": "Batch expired before this request completed",
+                "code": "batch_expired",
+                "batch_status": batch_status,
+            },
+            default_message="Batch expired before this request completed",
+        )
     elif batch_status == "cancelled":
         status = "cancelled"
         retryable = True
+        error = BatchError.from_payload(
+            {
+                "message": "Batch was cancelled before this request completed",
+                "code": "batch_cancelled",
+                "batch_status": batch_status,
+            },
+            default_message="Batch was cancelled before this request completed",
+        )
     else:
-        status = "failed_validation"
-        retryable = False
+        status = "incomplete"
+        retryable = True
+        error = BatchError.from_payload(
+            {
+                "message": (
+                    "Batch reached a terminal state without an output or error row for this request"
+                ),
+                "code": PARTIAL_RESULT_ERROR_CODE,
+                "batch_status": batch_status,
+            },
+            default_message=(
+                "Batch reached a terminal state without an output or error row for this request"
+            ),
+        )
 
     return BatchRow(
         custom_id=record["custom_id"],
@@ -145,7 +204,7 @@ def _build_row(
         request=record["request"],
         request_line=record["request_line"],
         response=None,
-        error=None,
+        error=error,
         source_item=record.get("source_item"),
         order=record["index"],
     )

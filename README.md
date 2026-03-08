@@ -54,10 +54,40 @@ results = job.wait(progress=True)
 
 for row in results.rows:
     if row.ok:
-        print(row.custom_id, row.response)
+        print(row.custom_id, row.response_body)
     else:
         print(row.custom_id, row.error)
 ```
+
+## Result helpers and row statuses
+
+`BatchResults` keeps the raw `rows` list, but also exposes helpers that are easier to consume in
+application code:
+
+- `results.successes()` / `results.successful()`
+- `results.failures()` / `results.failed()`
+- `results.retryables()` / `results.retryable()`
+- `results.incomplete()` for rows affected by cancellation, expiration, or missing terminal rows
+- `results.errors()` for normalized `BatchError` instances
+- `results.get(custom_id)` / `results.by_custom_id()`
+
+Each `BatchRow` exposes:
+
+- `row.response_body` for the response payload body when a row succeeded
+- `row.error` for normalized error metadata (`code`, `error_type`, `param`, `line`, `payload`)
+
+Documented row statuses:
+
+- `succeeded`: row completed successfully
+- `failed_validation`: the row failed with a non-retryable request or validation problem
+- `failed_execution`: the row failed after submission and may be retried
+- `expired`: the batch expired before the row completed
+- `cancelled`: the batch was cancelled before the row completed
+- `incomplete`: the batch reached a terminal state but no output or error row was returned for the request
+
+`incomplete`, `expired`, and `cancelled` rows are surfaced as actionable failures with normalized
+`BatchError` values so downstream code can inspect or retry them instead of treating them as silent
+validation failures.
 
 ## What It Handles
 

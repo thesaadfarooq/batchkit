@@ -135,7 +135,12 @@ def _output_rows() -> bytes:
 def _error_rows() -> bytes:
     row = {
         "custom_id": "movies-1",
-        "error": {"message": "rate limited", "code": "rate_limit_exceeded"},
+        "error": {
+            "message": "rate limited",
+            "type": "rate_limit_exceeded",
+            "param": "input",
+            "line": 2,
+        },
     }
     return (json.dumps(row) + "\n").encode("utf-8")
 
@@ -205,10 +210,24 @@ def test_wait_returns_results_and_retry_job(tmp_path: Path) -> None:
     )
 
     results = job.wait(poll_interval=0)
+    success = results.successes()[0]
+    failure = results.failures()[0]
 
     assert results.counts.total == 2
     assert results.counts.succeeded == 1
     assert results.counts.retryable == 1
+    assert success.custom_id == "movies-0"
+    assert success.response_body == {"id": "resp_1", "output_text": "The Matrix"}
+    assert results.get("movies-0") is success
+    assert results.get("missing-id") is None
+    assert failure.custom_id == "movies-1"
+    assert failure.status == "failed_execution"
+    assert failure.error is not None
+    assert failure.error.code == "rate_limit_exceeded"
+    assert failure.error.error_type == "rate_limit_exceeded"
+    assert failure.error.param == "input"
+    assert failure.error.line == 2
+    assert results.errors() == [failure.error]
 
     retry_job = job.retry_failed()
     retry_requests = (
@@ -221,6 +240,29 @@ def test_wait_returns_results_and_retry_job(tmp_path: Path) -> None:
     assert len(retry_requests) == 1
     assert json.loads(retry_requests[0])["custom_id"] == "movies-1"
     assert retry_job.storage_dir.parent == tmp_path
+
+
+def test_wait_marks_missing_rows_as_incomplete_and_retryable(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    results = job.wait(poll_interval=0)
+    incomplete = results.incomplete()
+
+    assert len(incomplete) == 1
+    assert incomplete[0].custom_id == "movies-1"
+    assert incomplete[0].status == "incomplete"
+    assert incomplete[0].retryable is True
+    assert incomplete[0].error is not None
+    assert incomplete[0].error.code == "missing_result_row"
+    assert incomplete[0].error.payload["batch_status"] == "completed"
 
 
 def test_refresh_serializes_request_counts_objects(tmp_path: Path) -> None:
@@ -255,6 +297,26 @@ def test_retry_failed_raises_public_retry_error(tmp_path: Path) -> None:
 
     with pytest.raises(RetryUnavailableError):
         job.retry_failed()
+
+
+def test_cancelled_batches_surface_cancelled_rows(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    results = job.cancel().results()
+
+    assert [row.status for row in results.rows] == ["cancelled", "cancelled"]
+    assert len(results.incomplete()) == 2
+    assert all(row.retryable for row in results.rows)
+    assert all(row.error is not None for row in results.rows)
+    assert results.errors()[0].code == "batch_cancelled"
 
 
 @pytest.mark.asyncio
