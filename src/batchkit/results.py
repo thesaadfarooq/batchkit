@@ -33,6 +33,7 @@ class BatchRow:
 
     @property
     def response_body(self) -> dict[str, Any] | None:
+        """Return the nested response body when present, otherwise the raw response mapping."""
         if self.response is None:
             return None
         body = self.response.get("body")
@@ -86,7 +87,10 @@ class BatchResults:
         return {row.custom_id: row for row in self.rows}
 
     def get(self, custom_id: str) -> BatchRow | None:
-        return self.by_custom_id().get(custom_id)
+        for row in self.rows:
+            if row.custom_id == custom_id:
+                return row
+        return None
 
     def ordered(self) -> BatchResults:
         return BatchResults(job=self.job, rows=sorted(self.rows, key=lambda row: row.order))
