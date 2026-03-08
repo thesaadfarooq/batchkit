@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Which semantic version part to bump"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+      - name: Install dependencies
+        run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Run quality checks
+        run: |
+          .venv/bin/python -m ruff check .
+          .venv/bin/python -m mypy src
+          .venv/bin/python -m pytest
+      - name: Bump version
+        id: bump
+        run: |
+          python_bin=.venv/bin/python
+          bumped_version=$($python_bin scripts/bump_version.py pyproject.toml "${{ inputs.release_type }}")
+          echo "version=$bumped_version" >> "$GITHUB_OUTPUT"
+      - name: Commit version bump
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "Release v$VERSION"
+      - name: Create tag
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: git tag -a "v$VERSION" -m "Release v$VERSION"
+      - name: Push release commit and tag
+        run: git push origin main --follow-tags
