@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 NON_RETRYABLE_ERROR_CODES = {"invalid_request_error", "validation_error"}
 PARTIAL_RESULT_ERROR_CODE = "missing_result_row"
+FAILED_BATCH_ERROR_CODE = "batch_failed"
 
 
 @dataclass(slots=True)
@@ -184,6 +185,17 @@ def _build_row(
                 "batch_status": batch_status,
             },
             default_message="Batch was cancelled before this request completed",
+        )
+    elif batch_status == "failed":
+        status = "failed_execution"
+        retryable = False
+        error = BatchError.from_payload(
+            {
+                "message": "Batch failed before this request produced an output or error row",
+                "code": FAILED_BATCH_ERROR_CODE,
+                "batch_status": batch_status,
+            },
+            default_message="Batch failed before this request produced an output or error row",
         )
     else:
         status = "incomplete"

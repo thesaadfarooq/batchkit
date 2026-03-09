@@ -80,7 +80,7 @@ Documented row statuses:
 
 - `succeeded`: row completed successfully
 - `failed_validation`: the row failed with a non-retryable request or validation problem
-- `failed_execution`: the row failed after submission and may be retried
+- `failed_execution`: the row or batch failed after submission; retryability depends on `row.retryable`
 - `expired`: the batch expired before the row completed
 - `cancelled`: the batch was cancelled before the row completed
 - `incomplete`: the batch reached a terminal state but no output or error row was returned for the request

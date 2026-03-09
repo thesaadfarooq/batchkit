@@ -319,6 +319,29 @@ def test_cancelled_batches_surface_cancelled_rows(tmp_path: Path) -> None:
     assert results.errors()[0].code == "batch_cancelled"
 
 
+def test_failed_batches_do_not_mark_missing_rows_retryable(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job._manifest["status"] = "failed"
+    job._manifest["output_file_id"] = None
+    job._manifest["error_file_id"] = None
+
+    results = job.results()
+
+    assert [row.status for row in results.rows] == ["failed_execution", "failed_execution"]
+    assert results.incomplete() == []
+    assert all(row.retryable is False for row in results.rows)
+    assert all(row.error is not None for row in results.rows)
+    assert results.errors()[0].code == "batch_failed"
+
+
 @pytest.mark.asyncio
 async def test_async_map_and_wait(tmp_path: Path) -> None:
     sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
