@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag to publish, for example v0.1.1"
+        required: true
+        type: string
+
+env:
+  TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
 
 jobs:
   build:
@@ -11,6 +20,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.11"
@@ -46,3 +57,16 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github_release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$TAG_NAME" --verify-tag --generate-notes
