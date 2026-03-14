@@ -117,7 +117,8 @@ class BatchJob:
         *,
         policy: RetryPolicy | None = None,
     ) -> BatchJob:
-        return self.retry_failed_with_policy(name=name, policy=policy)
+        plan = self.preview_retry(policy=policy)
+        return self._retry_from_plan(plan=plan, name=name)
 
     def preview_retry(self, policy: RetryPolicy | None = None) -> RetryPlan:
         results = self.results()
@@ -130,13 +131,7 @@ class BatchJob:
             policy=policy,
         )
 
-    def retry_failed_with_policy(
-        self,
-        *,
-        name: str | None = None,
-        policy: RetryPolicy | None = None,
-    ) -> BatchJob:
-        plan = self.preview_retry(policy=policy)
+    def _retry_from_plan(self, *, plan: RetryPlan, name: str | None = None) -> BatchJob:
         retry_records = plan.selected_rows
         if not retry_records:
             skipped = ", ".join(
@@ -331,7 +326,8 @@ class AsyncBatchJob(BatchJob):
         *,
         policy: RetryPolicy | None = None,
     ) -> AsyncBatchJob:
-        return await self.retry_failed_with_policy(name=name, policy=policy)
+        plan = await self.preview_retry(policy=policy)
+        return await self._retry_from_plan_async(plan=plan, name=name)
 
     async def preview_retry(self, policy: RetryPolicy | None = None) -> RetryPlan:  # type: ignore[override]
         results = await self.results()
@@ -344,13 +340,12 @@ class AsyncBatchJob(BatchJob):
             policy=policy,
         )
 
-    async def retry_failed_with_policy(  # type: ignore[override]
+    async def _retry_from_plan_async(
         self,
         *,
+        plan: RetryPlan,
         name: str | None = None,
-        policy: RetryPolicy | None = None,
     ) -> AsyncBatchJob:
-        plan = await self.preview_retry(policy=policy)
         retry_records = plan.selected_rows
         if not retry_records:
             skipped = ", ".join(

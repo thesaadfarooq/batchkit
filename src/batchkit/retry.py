@@ -108,6 +108,7 @@ class RetryPlan:
     lineage_job_ids: list[str]
     policy: RetryPolicy
     decisions: list[RetryDecision]
+    _summary: RetrySummary | None = field(default=None, init=False, repr=False)
 
     @property
     def selected(self) -> list[RetryDecision]:
@@ -123,17 +124,21 @@ class RetryPlan:
 
     @property
     def summary(self) -> RetrySummary:
-        selected_by_status = Counter(
-            decision.status for decision in self.selected if decision.status
-        )
-        skipped_by_reason = Counter(decision.reason_code for decision in self.skipped)
-        return RetrySummary(
-            total_rows=len(self.decisions),
-            selected_rows=len(self.selected),
-            skipped_rows=len(self.skipped),
-            selected_by_status=dict(sorted(selected_by_status.items())),
-            skipped_by_reason=dict(sorted(skipped_by_reason.items())),
-        )
+        if self._summary is None:
+            selected = self.selected
+            skipped = self.skipped
+            selected_by_status = Counter(
+                decision.status for decision in selected if decision.status
+            )
+            skipped_by_reason = Counter(decision.reason_code for decision in skipped)
+            self._summary = RetrySummary(
+                total_rows=len(self.decisions),
+                selected_rows=len(selected),
+                skipped_rows=len(skipped),
+                selected_by_status=dict(sorted(selected_by_status.items())),
+                skipped_by_reason=dict(sorted(skipped_by_reason.items())),
+            )
+        return self._summary
 
     def to_payload(self) -> dict[str, Any]:
         return {
