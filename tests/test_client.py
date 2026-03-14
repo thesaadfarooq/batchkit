@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
-from batchkit import AsyncBatchClient, BatchClient, DuplicateCustomIDError, RetryUnavailableError
+from batchkit import (
+    AsyncBatchClient,
+    BatchClient,
+    BatchNotReadyError,
+    DuplicateCustomIDError,
+    RetryUnavailableError,
+)
 
 
 @dataclass
@@ -124,6 +132,15 @@ class AsyncFakeSDK:
         self.batches = AsyncFakeBatchesAPI()
 
 
+class ParsedMovie(BaseModel):
+    id: str
+    output_text: str
+
+
+class InvalidMovie(BaseModel):
+    count: int
+
+
 def _output_rows() -> bytes:
     row = {
         "custom_id": "movies-0",
@@ -167,6 +184,9 @@ def test_map_writes_request_artifacts_and_submits_batch(tmp_path: Path) -> None:
     assert len(request_lines) == 2
     assert json.loads(request_lines[0])["body"]["model"] == "gpt-4.1-mini"
     assert sdk.batches.created_with[0]["endpoint"] == "/v1/responses"
+    assert job.input_file_id == "file-input-123"
+    assert job.output_file_id is None
+    assert job.error_file_id is None
 
 
 def test_map_rejects_duplicate_custom_ids(tmp_path: Path) -> None:
@@ -284,6 +304,174 @@ def test_refresh_serializes_request_counts_objects(tmp_path: Path) -> None:
     assert manifest["updated_at"] != manifest["created_at"]
 
 
+def test_resume_supports_manifest_path_directory_and_name(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk, storage_root=tmp_path)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+    )
+
+    resumed_from_dir = client.resume(job.storage_dir)
+    resumed_from_manifest = client.resume(job.storage_dir / "manifest.json")
+    resumed_from_name = client.resume("movies")
+
+    assert resumed_from_dir.id == job.id
+    assert resumed_from_manifest.id == job.id
+    assert resumed_from_name.id == job.id
+
+
+def test_resume_raises_for_missing_job(tmp_path: Path) -> None:
+    client = BatchClient(FakeSDK(), storage_root=tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="Could not find batch job 'missing'"):
+        client.resume("missing")
+
+
+def test_wait_prints_progress_and_results_support_schema_parsing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    job.wait(progress=True, poll_interval=0)
+    parsed_results = job.results(schema=ParsedMovie)
+    output = capsys.readouterr().out
+
+    assert "[batchkit] movies: in_progress -> completed" in output
+    assert parsed_results.successful()[0].response == {"id": "resp_1", "output_text": "The Matrix"}
+
+
+def test_results_with_invalid_schema_marks_rows_as_validation_failures(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job.wait(poll_interval=0)
+
+    results = job.results(schema=InvalidMovie)
+    row = results.rows[0]
+
+    assert row.ok is False
+    assert row.status == "failed_validation"
+    assert row.retryable is False
+    assert row.error is not None
+    assert row.error.code == "schema_validation_error"
+
+
+def test_results_raise_when_batch_never_reaches_terminal_state(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    sdk.batches.retrieve = lambda batch_id: sdk.batches.current  # type: ignore[method-assign]
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(BatchNotReadyError):
+        job.results()
+
+
+def test_wait_times_out_when_batch_never_completes(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    sdk.batches.retrieve = lambda batch_id: sdk.batches.current  # type: ignore[method-assign]
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(TimeoutError, match="Timed out waiting for batch batch-123"):
+        job.wait(timeout=0, poll_interval=0)
+
+
+def test_wait_calls_sleep_before_timing_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = FakeSDK()
+    sdk.batches.retrieve = lambda batch_id: sdk.batches.current  # type: ignore[method-assign]
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    monotonic_values = iter([0.0, 0.0, 2.0])
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr("batchkit.jobs.time.monotonic", lambda: next(monotonic_values, 2.0))
+    monkeypatch.setattr("batchkit.jobs.time.sleep", lambda interval: sleep_calls.append(interval))
+
+    with pytest.raises(TimeoutError):
+        job.wait(timeout=1, poll_interval=0.5)
+
+    assert sleep_calls == [0.5]
+
+
+def test_refresh_and_cancel_are_noops_without_batch_id(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job._manifest["batch_id"] = None
+
+    assert job.refresh() is job
+    assert job.cancel() is job
+
+
+def test_results_raise_runtime_error_without_pydantic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job.wait(poll_interval=0)
+    real_import = __import__
+
+    def fake_import(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "pydantic":
+            raise ImportError("missing")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="Schema parsing requires the optional 'pydantic' dependency"):
+        job.results(schema=ParsedMovie)
+
+
 def test_retry_failed_raises_public_retry_error(tmp_path: Path) -> None:
     sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
     client = BatchClient(sdk)
@@ -317,6 +505,29 @@ def test_cancelled_batches_surface_cancelled_rows(tmp_path: Path) -> None:
     assert all(row.retryable for row in results.rows)
     assert all(row.error is not None for row in results.rows)
     assert results.errors()[0].code == "batch_cancelled"
+
+
+def test_expired_batches_surface_expired_rows(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job._manifest["status"] = "expired"
+    job._manifest["output_file_id"] = None
+    job._manifest["error_file_id"] = None
+
+    results = job.results()
+
+    assert [row.status for row in results.rows] == ["expired", "expired"]
+    assert len(results.incomplete()) == 2
+    assert all(row.retryable is True for row in results.rows)
+    assert all(row.error is not None for row in results.rows)
+    assert results.errors()[0].code == "batch_expired"
 
 
 def test_failed_batches_do_not_mark_missing_rows_retryable(tmp_path: Path) -> None:
@@ -358,6 +569,233 @@ async def test_async_map_and_wait(tmp_path: Path) -> None:
 
     assert results.counts.total == 2
     assert results.successful()[0].custom_id == "movies-0"
+
+
+@pytest.mark.asyncio
+async def test_async_resume_supports_manifest_path_directory_and_name(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = AsyncBatchClient(sdk, storage_root=tmp_path)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+    )
+
+    resumed_from_dir = await client.resume(job.storage_dir)
+    resumed_from_manifest = await client.resume(job.storage_dir / "manifest.json")
+    resumed_from_name = await client.resume("movies")
+
+    assert resumed_from_dir.id == job.id
+    assert resumed_from_manifest.id == job.id
+    assert resumed_from_name.id == job.id
+
+
+@pytest.mark.asyncio
+async def test_async_resume_raises_for_missing_job(tmp_path: Path) -> None:
+    client = AsyncBatchClient(AsyncFakeSDK(), storage_root=tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="Could not find batch job 'missing'"):
+        await client.resume("missing")
+
+
+@pytest.mark.asyncio
+async def test_async_map_rejects_duplicate_custom_ids(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK()
+    client = AsyncBatchClient(sdk)
+
+    with pytest.raises(DuplicateCustomIDError):
+        await client.map(
+            name="movies",
+            items=[{"id": 1}, {"id": 1}],
+            model="gpt-4.1-mini",
+            build_request=lambda item: {"input": str(item["id"])},
+            custom_id=lambda item: "same-id",
+            storage_dir=tmp_path / "job",
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_wait_marks_missing_rows_as_incomplete_and_retryable(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = AsyncBatchClient(sdk)
+
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    results = await job.wait(poll_interval=0)
+    success = results.successes()[0]
+    incomplete = results.incomplete()
+
+    assert success.custom_id == "movies-0"
+    assert success.response_body == {"id": "resp_1", "output_text": "The Matrix"}
+    assert results.get("movies-0") is success
+    assert len(incomplete) == 1
+    assert incomplete[0].custom_id == "movies-1"
+    assert incomplete[0].status == "incomplete"
+    assert incomplete[0].retryable is True
+    assert incomplete[0].error is not None
+    assert incomplete[0].error.code == "missing_result_row"
+    assert results.errors() == [incomplete[0].error]
+
+
+@pytest.mark.asyncio
+async def test_async_results_support_schema_parsing_and_retry_failed(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    await job.wait(progress=True, poll_interval=0)
+    parsed_results = await job.results(schema=ParsedMovie)
+    retry_job = await job.retry_failed()
+
+    assert parsed_results.successful()[0].response == {"id": "resp_1", "output_text": "The Matrix"}
+    retry_requests = (
+        (retry_job.storage_dir / "requests.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    )
+    assert len(retry_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_results_raise_when_batch_never_reaches_terminal_state(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK()
+
+    async def stuck_retrieve(batch_id: str) -> FakeBatch:
+        return sdk.batches.current
+
+    sdk.batches.retrieve = stuck_retrieve  # type: ignore[method-assign]
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(BatchNotReadyError):
+        await job.results()
+
+
+@pytest.mark.asyncio
+async def test_async_wait_times_out_when_batch_never_completes(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK()
+
+    async def stuck_retrieve(batch_id: str) -> FakeBatch:
+        return sdk.batches.current
+
+    sdk.batches.retrieve = stuck_retrieve  # type: ignore[method-assign]
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(TimeoutError, match="Timed out waiting for batch batch-123"):
+        await job.wait(timeout=0, poll_interval=0)
+
+
+@pytest.mark.asyncio
+async def test_async_wait_calls_sleep_before_timing_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sdk = AsyncFakeSDK()
+
+    async def stuck_retrieve(batch_id: str) -> FakeBatch:
+        return sdk.batches.current
+
+    async def fake_sleep(interval: float) -> None:
+        sleep_calls.append(interval)
+
+    sdk.batches.retrieve = stuck_retrieve  # type: ignore[method-assign]
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    monotonic_values = iter([0.0, 0.0, 2.0])
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr("batchkit.jobs.time.monotonic", lambda: next(monotonic_values, 2.0))
+    monkeypatch.setattr("batchkit.jobs.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(TimeoutError):
+        await job.wait(timeout=1, poll_interval=0.5)
+
+    assert sleep_calls == [0.5]
+
+
+@pytest.mark.asyncio
+async def test_async_cancel_and_refresh_are_noops_without_batch_id(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK()
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job._manifest["batch_id"] = None
+
+    assert await job.refresh() is job
+    assert await job.cancel() is job
+
+
+@pytest.mark.asyncio
+async def test_async_cancel_surfaces_cancelled_rows(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK()
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    results = await (await job.cancel()).results()
+
+    assert [row.status for row in results.rows] == ["cancelled", "cancelled"]
+    assert len(results.incomplete()) == 2
+    assert results.errors()[0].code == "batch_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_async_retry_failed_raises_public_retry_error(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(RetryUnavailableError):
+        await job.retry_failed()
 
 
 @pytest.mark.asyncio
