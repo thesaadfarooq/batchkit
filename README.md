@@ -113,6 +113,44 @@ Documented row statuses:
 `BatchError` values so downstream code can inspect or retry them instead of treating them as silent
 validation failures.
 
+## Retry policies and reports
+
+`job.preview_retry()` lets you inspect retry decisions before you submit a follow-up batch:
+
+```python
+from batchkit import RetryPolicy
+
+
+plan = job.preview_retry(policy=RetryPolicy.execution_only())
+
+print(plan.summary.selected_rows)
+print(plan.summary.skipped_by_reason)
+```
+
+Built-in retry policy helpers:
+
+- `RetryPolicy.all_retryable()` retries all rows currently marked retryable
+- `RetryPolicy.execution_only()` retries only `failed_execution` rows
+- `RetryPolicy.incomplete_only()` retries only `incomplete`, `expired`, and `cancelled` rows
+
+You can also filter by error code:
+
+```python
+policy = RetryPolicy(
+    include_error_codes={"rate_limit_exceeded", "server_error"},
+    exclude_error_codes={"batch_failed"},
+)
+
+retry_job = job.retry_failed(policy=policy)
+```
+
+Each retry job persists:
+
+- the retry policy that was used
+- a summary of selected and skipped rows
+- per-row retry decisions in `retry_report.json`
+- retry lineage in the child manifest so multiple retry attempts remain inspectable
+
 ## What It Handles
 
 - request JSONL generation

@@ -9,6 +9,7 @@ from .errors import (
 )
 from .jobs import AsyncBatchJob, BatchJob
 from .results import BatchResults, BatchRow
+from .retry import RetryDecision, RetryPlan, RetryPolicy, RetrySummary
 
 __all__ = [
     "AsyncBatchClient",
@@ -21,5 +22,9 @@ __all__ = [
     "BatchResults",
     "BatchRow",
     "DuplicateCustomIDError",
+    "RetryDecision",
+    "RetryPlan",
+    "RetryPolicy",
+    "RetrySummary",
     "RetryUnavailableError",
 ]
