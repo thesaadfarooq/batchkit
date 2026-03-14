@@ -8,6 +8,7 @@ from typing import Any, cast
 from .errors import BatchError, BatchNotReadyError, RetryUnavailableError
 from .manifests import read_json, read_jsonl, utc_now_iso, write_json
 from .results import BatchResults, build_results
+from .retry import RetryPlan, RetryPolicy, build_retry_plan
 
 TERMINAL_STATUSES = {"completed", "failed", "expired", "cancelled"}
 
@@ -110,11 +111,34 @@ class BatchJob:
             results = self._apply_schema(results, schema)
         return results
 
-    def retry_failed(self, name: str | None = None) -> BatchJob:
+    def retry_failed(
+        self,
+        name: str | None = None,
+        *,
+        policy: RetryPolicy | None = None,
+    ) -> BatchJob:
+        plan = self.preview_retry(policy=policy)
+        return self._retry_from_plan(plan=plan, name=name)
+
+    def preview_retry(self, policy: RetryPolicy | None = None) -> RetryPlan:
         results = self.results()
-        retry_records = [row for row in results.rows if row.retryable]
+        lineage_job_ids = self._retry_lineage_for_child()
+        return build_retry_plan(
+            source_job_id=self.id,
+            source_job_name=self.name,
+            lineage_job_ids=lineage_job_ids,
+            results=results,
+            policy=policy,
+        )
+
+    def _retry_from_plan(self, *, plan: RetryPlan, name: str | None = None) -> BatchJob:
+        retry_records = plan.selected_rows
         if not retry_records:
-            raise RetryUnavailableError("No retryable rows found")
+            skipped = ", ".join(
+                f"{reason}={count}" for reason, count in plan.summary.skipped_by_reason.items()
+            )
+            detail = f" ({skipped})" if skipped else ""
+            raise RetryUnavailableError(f"No rows matched retry policy{detail}")
         retry_name = name or f"{self.name}-retry"
         request_rows = [row.request_line for row in retry_records]
         request_index = [
@@ -127,17 +151,55 @@ class BatchJob:
             }
             for index, row in enumerate(retry_records)
         ]
-        return cast(
-            BatchJob,
-            self._client._submit_request_rows(
-                name=retry_name,
-                request_rows=request_rows,
-                request_index=request_index,
-                metadata={"retry_of": self.id},
-                parent_job_id=self.id,
-                storage_root=self.storage_dir.parent,
+        return self._finalize_retry_job(
+            plan=plan,
+            child=cast(
+                BatchJob,
+                self._client._submit_request_rows(
+                    name=retry_name,
+                    request_rows=request_rows,
+                    request_index=request_index,
+                    metadata=self._retry_metadata(plan),
+                    parent_job_id=self.id,
+                    storage_root=self.storage_dir.parent,
+                ),
             ),
         )
+
+    def _retry_metadata(self, plan: RetryPlan) -> dict[str, str]:
+        return {
+            "retry_of": self.id,
+            "retry_root": plan.root_job_id,
+            "retry_attempt": str(plan.attempt),
+            "retry_selected": str(plan.summary.selected_rows),
+        }
+
+    def _retry_lineage_for_child(self) -> list[str]:
+        retry_info = self._manifest.get("retry")
+        if not isinstance(retry_info, dict):
+            return [self.id]
+        lineage = retry_info.get("lineage_job_ids")
+        if not isinstance(lineage, list):
+            return [self.id]
+        lineage_ids = [value for value in lineage if isinstance(value, str)]
+        return [*lineage_ids, self.id]
+
+    def _finalize_retry_job(self, *, plan: RetryPlan, child: BatchJob) -> BatchJob:
+        report_path = child.storage_dir / "retry_report.json"
+        write_json(report_path, plan.to_payload())
+        child._manifest["paths"]["retry_report"] = str(report_path)
+        child._manifest["retry"] = {
+            "source_job_id": self.id,
+            "source_job_name": self.name,
+            "root_job_id": plan.root_job_id,
+            "attempt": plan.attempt,
+            "lineage_job_ids": plan.lineage_job_ids,
+            "policy": plan.policy.to_payload(),
+            "summary": plan.summary.to_payload(),
+            "report_path": str(report_path),
+        }
+        write_json(child._manifest_file, child._manifest)
+        return child
 
     def cancel(self) -> BatchJob:
         if not self.batch_id:
@@ -258,11 +320,39 @@ class AsyncBatchJob(BatchJob):
             results = self._apply_schema(results, schema)
         return results
 
-    async def retry_failed(self, name: str | None = None) -> AsyncBatchJob:  # type: ignore[override]
+    async def retry_failed(  # type: ignore[override]
+        self,
+        name: str | None = None,
+        *,
+        policy: RetryPolicy | None = None,
+    ) -> AsyncBatchJob:
+        plan = await self.preview_retry(policy=policy)
+        return await self._retry_from_plan_async(plan=plan, name=name)
+
+    async def preview_retry(self, policy: RetryPolicy | None = None) -> RetryPlan:  # type: ignore[override]
         results = await self.results()
-        retry_records = [row for row in results.rows if row.retryable]
+        lineage_job_ids = self._retry_lineage_for_child()
+        return build_retry_plan(
+            source_job_id=self.id,
+            source_job_name=self.name,
+            lineage_job_ids=lineage_job_ids,
+            results=results,
+            policy=policy,
+        )
+
+    async def _retry_from_plan_async(
+        self,
+        *,
+        plan: RetryPlan,
+        name: str | None = None,
+    ) -> AsyncBatchJob:
+        retry_records = plan.selected_rows
         if not retry_records:
-            raise RetryUnavailableError("No retryable rows found")
+            skipped = ", ".join(
+                f"{reason}={count}" for reason, count in plan.summary.skipped_by_reason.items()
+            )
+            detail = f" ({skipped})" if skipped else ""
+            raise RetryUnavailableError(f"No rows matched retry policy{detail}")
         retry_name = name or f"{self.name}-retry"
         request_rows = [row.request_line for row in retry_records]
         request_index = [
@@ -275,17 +365,18 @@ class AsyncBatchJob(BatchJob):
             }
             for index, row in enumerate(retry_records)
         ]
-        return cast(
+        child = cast(
             AsyncBatchJob,
             await self._client._submit_request_rows(
                 name=retry_name,
                 request_rows=request_rows,
                 request_index=request_index,
-                metadata={"retry_of": self.id},
+                metadata=self._retry_metadata(plan),
                 parent_job_id=self.id,
                 storage_root=self.storage_dir.parent,
             ),
         )
+        return cast(AsyncBatchJob, self._finalize_retry_job(plan=plan, child=child))
 
     async def cancel(self) -> AsyncBatchJob:  # type: ignore[override]
         if not self.batch_id:

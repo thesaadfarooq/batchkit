@@ -13,6 +13,7 @@ from batchkit import (
     BatchClient,
     BatchNotReadyError,
     DuplicateCustomIDError,
+    RetryPolicy,
     RetryUnavailableError,
 )
 
@@ -499,6 +500,166 @@ def test_retry_failed_raises_public_retry_error(tmp_path: Path) -> None:
         job.retry_failed()
 
 
+def test_preview_retry_reports_selected_and_skipped_rows(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    plan = job.preview_retry()
+
+    assert plan.source_job_id == job.id
+    assert plan.root_job_id == job.id
+    assert plan.attempt == 1
+    assert plan.lineage_job_ids == [job.id]
+    assert plan.summary.total_rows == 2
+    assert plan.summary.selected_rows == 1
+    assert plan.summary.skipped_rows == 1
+    assert plan.summary.selected_by_status == {"failed_execution": 1}
+    assert plan.summary.skipped_by_reason == {"non_retryable": 1}
+    assert [decision.custom_id for decision in plan.selected] == ["movies-1"]
+    assert [decision.reason_code for decision in plan.skipped] == ["non_retryable"]
+
+
+def test_preview_retry_can_filter_by_status_and_error_code(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    filtered_by_code = job.preview_retry(
+        policy=RetryPolicy(include_error_codes={"api_connection_error"})
+    )
+
+    assert filtered_by_code.summary.selected_rows == 0
+    assert filtered_by_code.summary.skipped_by_reason == {
+        "error_code_not_included": 1,
+        "non_retryable": 1,
+    }
+
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
+    client = BatchClient(sdk)
+    incomplete_job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "incomplete-job",
+    )
+
+    filtered_by_status = incomplete_job.preview_retry(policy=RetryPolicy.execution_only())
+
+    assert filtered_by_status.summary.selected_rows == 0
+    assert filtered_by_status.summary.skipped_by_reason == {
+        "non_retryable": 1,
+        "status_filtered": 1,
+    }
+
+
+def test_preview_retry_handles_invalid_lineage_and_excluded_error_codes(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+    job._manifest["retry"] = {"lineage_job_ids": "invalid"}
+
+    filtered = job.preview_retry(policy=RetryPolicy.incomplete_only())
+
+    assert filtered.lineage_job_ids == [job.id]
+    assert filtered.summary.skipped_by_reason == {
+        "non_retryable": 1,
+        "status_filtered": 1,
+    }
+
+    excluded = job.preview_retry(policy=RetryPolicy(exclude_error_codes={"rate_limit_exceeded"}))
+    assert excluded.summary.skipped_by_reason == {
+        "error_code_excluded": 1,
+        "non_retryable": 1,
+    }
+
+
+def test_retry_failed_persists_retry_report_and_lineage(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    retry_job = job.retry_failed(policy=RetryPolicy.execution_only())
+    retry_manifest = json.loads(
+        (retry_job.storage_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    retry_report = json.loads(
+        (retry_job.storage_dir / "retry_report.json").read_text(encoding="utf-8")
+    )
+
+    assert retry_manifest["retry"]["source_job_id"] == job.id
+    assert retry_manifest["retry"]["root_job_id"] == job.id
+    assert retry_manifest["retry"]["attempt"] == 1
+    assert retry_manifest["retry"]["lineage_job_ids"] == [job.id]
+    assert retry_manifest["retry"]["summary"]["selected_rows"] == 1
+    assert retry_manifest["paths"]["retry_report"].endswith("retry_report.json")
+    assert retry_report["policy"]["statuses"] == ["failed_execution"]
+    assert retry_report["summary"]["selected_rows"] == 1
+    assert sdk.batches.created_with[1]["metadata"] == {
+        "retry_attempt": "1",
+        "retry_of": job.id,
+        "retry_root": job.id,
+        "retry_selected": "1",
+    }
+
+    retry_job_two = retry_job.retry_failed(
+        name="movies-retry-2",
+        policy=RetryPolicy.execution_only(),
+    )
+    retry_manifest_two = json.loads(
+        (retry_job_two.storage_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert retry_manifest_two["retry"]["root_job_id"] == job.id
+    assert retry_manifest_two["retry"]["attempt"] == 2
+    assert retry_manifest_two["retry"]["lineage_job_ids"] == [job.id, retry_job.id]
+    assert sdk.batches.created_with[2]["metadata"]["retry_of"] == retry_job.id
+    assert sdk.batches.created_with[2]["metadata"]["retry_root"] == job.id
+
+
+def test_retry_failed_with_filtered_policy_raises_clear_error(tmp_path: Path) -> None:
+    sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = BatchClient(sdk)
+    job = client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(
+        RetryUnavailableError,
+        match="No rows matched retry policy",
+    ):
+        job.retry_failed(policy=RetryPolicy(include_error_codes={"api_connection_error"}))
+
+
 def test_cancelled_batches_surface_cancelled_rows(tmp_path: Path) -> None:
     sdk = FakeSDK()
     client = BatchClient(sdk)
@@ -683,6 +844,31 @@ async def test_async_results_support_schema_parsing_and_retry_failed(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_async_preview_retry_and_retry_report(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    plan = await job.preview_retry(policy=RetryPolicy.execution_only())
+    retry_job = await job.retry_failed(policy=RetryPolicy.execution_only())
+    retry_manifest = json.loads(
+        (retry_job.storage_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert plan.summary.selected_rows == 1
+    assert plan.summary.selected_by_status == {"failed_execution": 1}
+    assert retry_manifest["retry"]["attempt"] == 1
+    assert retry_manifest["retry"]["lineage_job_ids"] == [job.id]
+    assert retry_manifest["retry"]["policy"]["statuses"] == ["failed_execution"]
+
+
+@pytest.mark.asyncio
 async def test_async_results_raise_when_batch_never_reaches_terminal_state(tmp_path: Path) -> None:
     sdk = AsyncFakeSDK()
 
@@ -808,6 +994,25 @@ async def test_async_retry_failed_raises_public_retry_error(tmp_path: Path) -> N
 
     with pytest.raises(RetryUnavailableError):
         await job.retry_failed()
+
+
+@pytest.mark.asyncio
+async def test_async_retry_failed_with_filtered_policy_raises_clear_error(tmp_path: Path) -> None:
+    sdk = AsyncFakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
+    client = AsyncBatchClient(sdk)
+    job = await client.map(
+        name="movies",
+        items=[{"prompt": "a"}, {"prompt": "b"}],
+        model="gpt-4.1-mini",
+        build_request=lambda item: {"input": item["prompt"]},
+        storage_dir=tmp_path / "job",
+    )
+
+    with pytest.raises(
+        RetryUnavailableError,
+        match="No rows matched retry policy",
+    ):
+        await job.retry_failed(policy=RetryPolicy(include_error_codes={"api_connection_error"}))
 
 
 @pytest.mark.asyncio
