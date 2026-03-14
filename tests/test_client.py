@@ -330,7 +330,10 @@ def test_resume_raises_for_missing_job(tmp_path: Path) -> None:
         client.resume("missing")
 
 
-def test_wait_prints_progress_and_results_support_schema_parsing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_wait_prints_progress_and_results_support_schema_parsing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     sdk = FakeSDK(output_payload=_output_rows(), error_payload=_error_rows())
     client = BatchClient(sdk)
     job = client.map(
@@ -403,7 +406,10 @@ def test_wait_times_out_when_batch_never_completes(tmp_path: Path) -> None:
         job.wait(timeout=0, poll_interval=0)
 
 
-def test_wait_calls_sleep_before_timing_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wait_calls_sleep_before_timing_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sdk = FakeSDK()
     sdk.batches.retrieve = lambda batch_id: sdk.batches.current  # type: ignore[method-assign]
     client = BatchClient(sdk)
@@ -442,7 +448,10 @@ def test_refresh_and_cancel_are_noops_without_batch_id(tmp_path: Path) -> None:
     assert job.cancel() is job
 
 
-def test_results_raise_runtime_error_without_pydantic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_results_raise_runtime_error_without_pydantic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sdk = FakeSDK(output_payload=_output_rows(), error_payload=b"")
     client = BatchClient(sdk)
     job = client.map(
@@ -468,7 +477,10 @@ def test_results_raise_runtime_error_without_pydantic(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr("builtins.__import__", fake_import)
 
-    with pytest.raises(RuntimeError, match="Schema parsing requires the optional 'pydantic' dependency"):
+    with pytest.raises(
+        RuntimeError,
+        match="Schema parsing requires the optional 'pydantic' dependency",
+    ):
         job.results(schema=ParsedMovie)
 
 

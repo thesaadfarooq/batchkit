@@ -144,7 +144,9 @@ async def test_async_provider_upload_and_download_raise_for_invalid_sdk_shapes(
     request_file.write_text("{}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="SDK did not return a file id"):
-        await AsyncOpenAIProvider(SDK(AsyncFilesAPI({}, b"payload"))).upload_batch_file(request_file)
+        await AsyncOpenAIProvider(
+            SDK(AsyncFilesAPI({}, b"payload"))
+        ).upload_batch_file(request_file)
 
     with pytest.raises(TypeError, match="Unsupported file content response from SDK"):
         await AsyncOpenAIProvider(SDK(AsyncFilesAPI({"id": "file-123"}, object()))).download_file(
